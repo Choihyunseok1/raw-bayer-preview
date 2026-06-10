@@ -1,4 +1,6 @@
 const vscode = require('vscode');
+const { spawn } = require('child_process');
+const fs = require('fs');
 
 const VIEW_TYPE = 'rawBayerPreview.viewer';
 
@@ -47,6 +49,7 @@ class RawBayerPreviewProvider {
       width: config.get('defaultWidth', 1920),
       height: config.get('defaultHeight', 1080),
       channels: config.get('defaultChannels', 4),
+      displayMode: 'mosaic',
       pattern: config.get('defaultBayerPattern', 'RGGB'),
       channelOrder: config.get('defaultChannelOrder', 'RGGB'),
       bitDepth: config.get('defaultBitDepth', 8),
@@ -58,18 +61,18 @@ class RawBayerPreviewProvider {
       gain: 1,
       normalize: true
     };
-    const fileBytesPromise = vscode.workspace.fs.readFile(document.uri);
+    const fileBytesPromise = loadPreviewBytes(document.uri);
 
     webview.onDidReceiveMessage(async (message) => {
       if (message?.type === 'ready') {
         try {
-          const fileBytes = await fileBytesPromise;
+          const payload = await fileBytesPromise;
           webview.postMessage({
             type: 'file',
             name: vscode.workspace.asRelativePath(document.uri),
-            byteLength: fileBytes.byteLength,
-            settings: initialSettings,
-            buffer: exactArrayBuffer(fileBytes)
+            byteLength: payload.sourceByteLength,
+            settings: { ...initialSettings, ...payload.settings },
+            buffer: exactArrayBuffer(payload.bytes)
           });
         } catch (error) {
           webview.postMessage({
@@ -112,6 +115,15 @@ class RawBayerPreviewProvider {
           <option value="4">4 channels Bayer shuffle</option>
         </select>
       </label>
+      <label>View
+        <select id="displayMode">
+          <option value="mosaic">Bayer mosaic</option>
+          <option value="r">R plane</option>
+          <option value="g1">G1 plane</option>
+          <option value="g2">G2 plane</option>
+          <option value="b">B plane</option>
+        </select>
+      </label>
       <label>Bayer Pattern
         <select id="pattern">
           <option>RGGB</option>
@@ -135,6 +147,7 @@ class RawBayerPreviewProvider {
           <option value="12">12-bit</option>
           <option value="14">14-bit</option>
           <option value="16">16-bit</option>
+          <option value="24">24-bit</option>
           <option value="32">32-bit</option>
           <option value="64">64-bit</option>
         </select>
@@ -197,6 +210,118 @@ function getNonce() {
     text += chars.charAt(Math.floor(Math.random() * chars.length));
   }
   return text;
+}
+
+async function loadPreviewBytes(uri) {
+  if (uri.scheme === 'file' && isCr2Path(uri.fsPath)) {
+    return convertCr2ToNpy(uri.fsPath);
+  }
+  const bytes = await vscode.workspace.fs.readFile(uri);
+  return {
+    bytes,
+    sourceByteLength: bytes.byteLength,
+    settings: {}
+  };
+}
+
+function isCr2Path(filePath) {
+  return /\.cr2$/i.test(filePath);
+}
+
+function convertCr2ToNpy(filePath) {
+  const script = `
+import json
+import sys
+
+try:
+    import numpy as np
+    import rawpy
+except Exception as exc:
+    print("RAW_BAYER_PREVIEW_ERROR " + str(exc), file=sys.stderr)
+    sys.exit(2)
+
+path = sys.argv[1]
+with rawpy.imread(path) as raw:
+    image = raw.raw_image_visible.copy()
+    color_desc = raw.color_desc.decode("ascii", errors="ignore") if isinstance(raw.color_desc, bytes) else str(raw.color_desc)
+    pattern = "".join(color_desc[int(raw.raw_pattern[y, x])][:1] for y in range(2) for x in range(2))
+    black_levels = [float(value) for value in raw.black_level_per_channel]
+    metadata = {
+        "width": int(image.shape[1]),
+        "height": int(image.shape[0]),
+        "pattern": pattern if len(pattern) == 4 else "RGGB",
+        "black": min(black_levels) if black_levels else 0,
+        "white": float(raw.white_level) if raw.white_level is not None else 0
+    }
+
+image = np.ascontiguousarray(image.astype(np.uint16, copy=False))
+np.save(sys.stdout.buffer, image, allow_pickle=False)
+print("RAW_BAYER_PREVIEW_META " + json.dumps(metadata), file=sys.stderr)
+`;
+
+  return new Promise((resolve, reject) => {
+    const child = spawn('python', ['-c', script, filePath], {
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    const stdout = [];
+    let stdoutLength = 0;
+    let stderrText = '';
+
+    child.stdout.on('data', (chunk) => {
+      stdout.push(chunk);
+      stdoutLength += chunk.length;
+    });
+    child.stderr.on('data', (chunk) => {
+      stderrText += chunk.toString('utf8');
+    });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code !== 0) {
+        reject(new Error(cr2ErrorMessage(stderrText)));
+        return;
+      }
+      const metadata = parseCr2Metadata(stderrText);
+      resolve({
+        bytes: Buffer.concat(stdout, stdoutLength),
+        sourceByteLength: fs.statSync(filePath).size,
+        settings: {
+          width: metadata.width,
+          height: metadata.height,
+          channels: 1,
+          pattern: metadata.pattern,
+          bitDepth: 16,
+          sampleFormat: 'uint',
+          endian: 'little',
+          packing: 'unpacked',
+          black: metadata.black,
+          white: metadata.white
+        }
+      });
+    });
+  });
+}
+
+function parseCr2Metadata(stderrText) {
+  const line = stderrText
+    .split(/\r?\n/)
+    .find((entry) => entry.startsWith('RAW_BAYER_PREVIEW_META '));
+  if (!line) {
+    return {};
+  }
+  try {
+    return JSON.parse(line.slice('RAW_BAYER_PREVIEW_META '.length));
+  } catch {
+    return {};
+  }
+}
+
+function cr2ErrorMessage(stderrText) {
+  const line = stderrText
+    .split(/\r?\n/)
+    .find((entry) => entry.startsWith('RAW_BAYER_PREVIEW_ERROR '));
+  const detail = line ? line.slice('RAW_BAYER_PREVIEW_ERROR '.length) : stderrText.trim();
+  return `Failed to decode CR2. Install Python rawpy/numpy for CR2 support. ${detail}`;
 }
 
 function exactArrayBuffer(bytes) {

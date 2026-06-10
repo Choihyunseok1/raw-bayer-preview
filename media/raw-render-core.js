@@ -9,9 +9,10 @@
 
   const PATTERNS = ['RGGB', 'BGGR', 'GRBG', 'GBRG'];
   const PACKINGS = ['unpacked', 'mipi10', 'mipi12'];
-  const BIT_DEPTHS = [8, 10, 12, 14, 16, 32, 64];
+  const BIT_DEPTHS = [8, 10, 12, 14, 16, 24, 32, 64];
   const CHANNELS = [1, 3, 4];
   const SAMPLE_FORMATS = ['uint', 'int', 'float'];
+  const DISPLAY_MODES = ['mosaic', 'r', 'g1', 'g2', 'b'];
   const MAX_PIXELS = 120000000;
 
   function normalizeSettings(settings) {
@@ -28,7 +29,7 @@
     } else if (!BIT_DEPTHS.includes(bitDepth)) {
       bitDepth = 8;
     }
-    if (sampleFormat === 'float' && bitDepth !== 32 && bitDepth !== 64) {
+    if (sampleFormat === 'float' && bitDepth !== 16 && bitDepth !== 32 && bitDepth !== 64) {
       bitDepth = 32;
     }
     if (bitDepth === 64 && sampleFormat !== 'float') {
@@ -43,6 +44,7 @@
       width: positiveInteger(source.width, 1),
       height: positiveInteger(source.height, 1),
       channels,
+      displayMode: displayModeFrom(source.displayMode),
       pattern: patternFrom(source.pattern, 'RGGB'),
       channelOrder: patternFrom(source.channelOrder, 'RGGB'),
       bitDepth,
@@ -60,7 +62,8 @@
   function validateRenderable(settings, maxPixels) {
     const normalized = normalizeSettings(settings);
     const limit = maxPixels || MAX_PIXELS;
-    const pixelCount = normalized.width * normalized.height;
+    const dimensions = outputDimensions(normalized);
+    const pixelCount = dimensions.width * dimensions.height;
     if (!Number.isSafeInteger(pixelCount) || pixelCount > limit) {
       return {
         ok: false,
@@ -89,6 +92,9 @@
     if (bitDepth === 32) {
       return 4;
     }
+    if (bitDepth === 24) {
+      return 3;
+    }
     if (bitDepth === 64) {
       return 8;
     }
@@ -113,6 +119,16 @@
     }
 
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    if (normalized.sampleFormat === 'float' && normalized.bitDepth === 16) {
+      reader = (index) => {
+        const offset = index * 2;
+        if (offset + 1 >= bytes.byteLength) {
+          return 0;
+        }
+        return float16ToNumber(view.getUint16(offset, normalized.endian === 'little'));
+      };
+      return wrapSourceLayoutReader(reader, normalized);
+    }
     if (normalized.sampleFormat === 'float' && normalized.bitDepth === 32) {
       reader = (index) => {
         const offset = index * 4;
@@ -124,6 +140,21 @@
       reader = (index) => {
         const offset = index * 8;
         return offset + 7 < bytes.byteLength ? view.getFloat64(offset, normalized.endian === 'little') : 0;
+      };
+      return wrapSourceLayoutReader(reader, normalized);
+    }
+    if (normalized.bitDepth === 24) {
+      reader = (index) => {
+        const offset = index * 3;
+        if (offset + 2 >= bytes.byteLength) {
+          return 0;
+        }
+        const value = normalized.endian === 'little'
+          ? bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16)
+          : (bytes[offset] << 16) | (bytes[offset + 1] << 8) | bytes[offset + 2];
+        return normalized.sampleFormat === 'int' && (value & 0x800000)
+          ? value - 0x1000000
+          : value;
       };
       return wrapSourceLayoutReader(reader, normalized);
     }
@@ -194,21 +225,29 @@
       return { black: normalized.black, white };
     }
 
-    const totalPixels = normalized.width * normalized.height;
-    const visibleSamples = normalized.channels === 3 ? totalPixels * 3 : totalPixels;
+    const visibleSamples = displaySampleCount(normalized);
     const stride = Math.max(1, Math.floor(visibleSamples / 250000));
-    const channelForPosition = normalized.channels === 4
-      ? fourChannelShuffleMap(normalized.pattern, normalized.channelOrder)
-      : null;
     let low = Number.POSITIVE_INFINITY;
     let high = Number.NEGATIVE_INFINITY;
+    const values = [];
 
     for (let i = 0; i < visibleSamples; i += stride) {
-      const value = samples(visibleSampleIndex(i, normalized, channelForPosition));
+      const sampleIndex = displaySampleIndex(i, normalized);
+      if (sampleIndex === null) {
+        continue;
+      }
+      const value = samples(sampleIndex);
       if (Number.isFinite(value)) {
         low = Math.min(low, value);
         high = Math.max(high, value);
+        values.push(value);
       }
+    }
+
+    if (values.length >= 1000) {
+      values.sort((a, b) => a - b);
+      low = quantile(values, 0.005);
+      high = quantile(values, 0.995);
     }
 
     if (!Number.isFinite(low) || high <= low) {
@@ -218,16 +257,28 @@
     return { black: low, white: high };
   }
 
-  function visibleSampleIndex(visibleIndex, settings, channelForPosition) {
-    if (settings.channels === 3) {
-      return visibleIndex;
+  function quantile(sortedValues, fraction) {
+    const index = (sortedValues.length - 1) * fraction;
+    const lower = Math.floor(index);
+    const upper = Math.ceil(index);
+    if (lower === upper) {
+      return sortedValues[lower];
     }
-    if (settings.channels === 4) {
-      const pixel = visibleIndex;
-      const x = pixel % settings.width;
-      const y = Math.floor(pixel / settings.width);
-      const position = (y & 1) * 2 + (x & 1);
-      return pixel * 4 + channelForPosition[position];
+    const weight = index - lower;
+    return sortedValues[lower] * (1 - weight) + sortedValues[upper] * weight;
+  }
+
+  function displaySampleCount(settings) {
+    const dimensions = outputDimensions(settings);
+    if (settings.displayMode === 'mosaic' && settings.channels === 3) {
+      return dimensions.width * dimensions.height * 3;
+    }
+    return dimensions.width * dimensions.height;
+  }
+
+  function displaySampleIndex(visibleIndex, settings) {
+    if (settings.displayMode !== 'mosaic') {
+      return planeSampleIndex(visibleIndex, settings);
     }
     return visibleIndex;
   }
@@ -294,6 +345,11 @@
     const normalized = normalizeSettings(settings);
     const scale = 255 / Math.max(1e-9, range.white - range.black);
 
+    if (normalized.displayMode !== 'mosaic') {
+      fillPlane(out, samples, normalized, range.black, scale);
+      return out;
+    }
+
     if (normalized.channels === 4) {
       fillFourChannel(out, samples, normalized, range.black, scale);
       return out;
@@ -314,12 +370,13 @@
     }
     const samples = makeSampleReader(inputBytes, normalized);
     const range = computeRange(samples, normalized, maxSample(normalized));
-    const data = output || new Uint8ClampedArray(normalized.width * normalized.height * 4);
+    const dimensions = outputDimensions(normalized);
+    const data = output || new Uint8ClampedArray(dimensions.width * dimensions.height * 4);
     fillImageData(data, samples, normalized, range);
     return {
       data,
-      width: normalized.width,
-      height: normalized.height,
+      width: dimensions.width,
+      height: dimensions.height,
       range,
       expectedBytes: expectedBytes(normalized),
       settings: normalized
@@ -329,14 +386,19 @@
   function fillFourChannel(out, samples, settings, black, scale) {
     const channelForPosition = fourChannelShuffleMap(settings.pattern, settings.channelOrder);
     const pattern = settings.pattern;
+    const outputWidth = settings.width * 2;
     for (let y = 0; y < settings.height; y += 1) {
       const row = y * settings.width;
       for (let x = 0; x < settings.width; x += 1) {
         const pixel = row + x;
-        const position = (y & 1) * 2 + (x & 1);
-        const color = pattern[position] || 'G';
-        const value = toByte(samples(pixel * 4 + channelForPosition[position]), black, scale, settings.gain);
-        writeBayerPixel(out, pixel * 4, color, value);
+        for (let position = 0; position < 4; position += 1) {
+          const outputX = x * 2 + (position & 1);
+          const outputY = y * 2 + (position >> 1);
+          const outputPixel = outputY * outputWidth + outputX;
+          const color = pattern[position] || 'G';
+          const value = toByte(samples(pixel * 4 + channelForPosition[position]), black, scale, settings.gain);
+          writeBayerPixel(out, outputPixel * 4, color, value);
+        }
       }
     }
   }
@@ -350,6 +412,47 @@
       out[target + 1] = toByte(samples(source + 1), black, scale, settings.gain);
       out[target + 2] = toByte(samples(source + 2), black, scale, settings.gain);
       out[target + 3] = 255;
+    }
+  }
+
+  function fillPlane(out, samples, settings, black, scale) {
+    const dimensions = outputDimensions(settings);
+    if (settings.channels === 4) {
+      const position = planePosition(settings.displayMode, settings.pattern);
+      const channelForPosition = fourChannelShuffleMap(settings.pattern, settings.channelOrder);
+      const channel = channelForPosition[position];
+      const pixels = dimensions.width * dimensions.height;
+      for (let pixel = 0; pixel < pixels; pixel += 1) {
+        const value = toByte(samples(pixel * 4 + channel), black, scale, settings.gain);
+        writeGrayPixel(out, pixel * 4, value);
+      }
+      return;
+    }
+
+    if (settings.channels === 3) {
+      const channel = settings.displayMode === 'r' ? 0 : settings.displayMode === 'b' ? 2 : 1;
+      const pixels = dimensions.width * dimensions.height;
+      for (let pixel = 0; pixel < pixels; pixel += 1) {
+        const value = toByte(samples(pixel * 3 + channel), black, scale, settings.gain);
+        writeGrayPixel(out, pixel * 4, value);
+      }
+      return;
+    }
+
+    const position = planePosition(settings.displayMode, settings.pattern);
+    const xOffset = position & 1;
+    const yOffset = position >> 1;
+    for (let y = 0; y < dimensions.height; y += 1) {
+      const sourceY = y * 2 + yOffset;
+      for (let x = 0; x < dimensions.width; x += 1) {
+        const pixel = y * dimensions.width + x;
+        const sourceX = x * 2 + xOffset;
+        const sampleIndex = sourceX >= settings.width || sourceY >= settings.height
+          ? null
+          : sourceY * settings.width + sourceX;
+        const value = sampleIndex === null ? 0 : toByte(samples(sampleIndex), black, scale, settings.gain);
+        writeGrayPixel(out, pixel * 4, value);
+      }
     }
   }
 
@@ -370,6 +473,56 @@
     out[offset + 1] = color === 'G' ? value : 0;
     out[offset + 2] = color === 'B' ? value : 0;
     out[offset + 3] = 255;
+  }
+
+  function writeGrayPixel(out, offset, value) {
+    out[offset] = value;
+    out[offset + 1] = value;
+    out[offset + 2] = value;
+    out[offset + 3] = 255;
+  }
+
+  function planeSampleIndex(planeIndex, settings) {
+    if (settings.channels === 4) {
+      const position = planePosition(settings.displayMode, settings.pattern);
+      const channelForPosition = fourChannelShuffleMap(settings.pattern, settings.channelOrder);
+      return planeIndex * 4 + channelForPosition[position];
+    }
+    if (settings.channels === 3) {
+      const channel = settings.displayMode === 'r'
+        ? 0
+        : settings.displayMode === 'b'
+          ? 2
+          : 1;
+      return planeIndex * 3 + channel;
+    }
+
+    const dimensions = outputDimensions(settings);
+    const position = planePosition(settings.displayMode, settings.pattern);
+    const sourceX = (planeIndex % dimensions.width) * 2 + (position & 1);
+    const sourceY = Math.floor(planeIndex / dimensions.width) * 2 + (position >> 1);
+    if (sourceX >= settings.width || sourceY >= settings.height) {
+      return null;
+    }
+    return sourceY * settings.width + sourceX;
+  }
+
+  function planePosition(displayMode, pattern) {
+    const positions = [...patternFrom(pattern, 'RGGB')];
+    if (displayMode === 'r') {
+      return Math.max(0, positions.indexOf('R'));
+    }
+    if (displayMode === 'b') {
+      const index = positions.indexOf('B');
+      return index === -1 ? 3 : index;
+    }
+    const greens = positions
+      .map((color, index) => color === 'G' ? index : -1)
+      .filter((index) => index !== -1);
+    if (displayMode === 'g2') {
+      return greens[1] ?? greens[0] ?? 2;
+    }
+    return greens[0] ?? 1;
   }
 
   function fourChannelShuffleMap(pattern, channelOrder) {
@@ -413,6 +566,10 @@
           sourceName: fileName || ''
         }
       };
+    }
+
+    if (isCanonCr2(bytes)) {
+      throw new Error('Canon CR2 is camera RAW, not a flat RAW buffer. Install/use the VS Code extension CR2 converter path.');
     }
 
     return {
@@ -537,7 +694,7 @@
     if (kind === 'i' && [8, 16, 32].includes(bitDepth)) {
       return { bitDepth, sampleFormat: 'int', endian };
     }
-    if (kind === 'f' && [32, 64].includes(bitDepth)) {
+    if (kind === 'f' && [16, 32, 64].includes(bitDepth)) {
       return { bitDepth, sampleFormat: 'float', endian };
     }
     if (kind === 'b' && bitDepth === 8) {
@@ -563,6 +720,19 @@
       return { heightAxis: 2, widthAxis: 3, channelAxis: 1 };
     }
     throw new Error(`Unsupported NPY image shape (${shape.join(', ')}).`);
+  }
+
+  function isCanonCr2(bytes) {
+    if (bytes.length < 12) {
+      return false;
+    }
+    const littleTiff = bytes[0] === 0x49 && bytes[1] === 0x49 && bytes[2] === 0x2a && bytes[3] === 0x00;
+    const bigTiff = bytes[0] === 0x4d && bytes[1] === 0x4d && bytes[2] === 0x00 && bytes[3] === 0x2a;
+    return (littleTiff || bigTiff) &&
+      bytes[8] === 0x43 &&
+      bytes[9] === 0x52 &&
+      bytes[10] === 0x02 &&
+      bytes[11] === 0x00;
   }
 
   function parsePnm(bytes) {
@@ -680,6 +850,113 @@
     return null;
   }
 
+  function guessRawSettings(inputBytes, settings, fileName) {
+    const bytes = inputBytes instanceof Uint8Array ? inputBytes : new Uint8Array(inputBytes || []);
+    const normalized = normalizeSettings(settings);
+    const byName = dimensionsFromName(fileName);
+    if (byName) {
+      return { ...normalized, width: byName.width, height: byName.height };
+    }
+
+    const currentExpected = expectedBytes(normalized);
+    if (currentExpected === bytes.byteLength) {
+      return normalized;
+    }
+
+    const candidates = rawLayoutCandidates(bytes, normalized);
+    return candidates.length ? candidates[0].settings : null;
+  }
+
+  function rawLayoutCandidates(bytes, baseSettings) {
+    const preferred24 = looksLikeThreeByteIntegerSamples(bytes);
+    const candidates = [];
+    for (const bitDepth of [8, 16, 24, 32]) {
+      for (const channels of CHANNELS) {
+        const settings = normalizeSettings({
+          ...baseSettings,
+          channels,
+          bitDepth,
+          sampleFormat: 'uint',
+          packing: 'unpacked',
+          sourceLayout: null
+        });
+        const pixelCount = pixelCountFromBytes(bytes.byteLength, settings);
+        if (!pixelCount || expectedBytes({ ...settings, width: 1, height: pixelCount }) !== bytes.byteLength) {
+          continue;
+        }
+        const dimensions = dimensionsFromPixelCount(pixelCount);
+        if (!dimensions) {
+          continue;
+        }
+        let score = dimensions.source === 'common-size' ? 0 : 20;
+        if (preferred24 && bitDepth === 24 && channels === 1) {
+          score -= 10;
+        }
+        if (!preferred24 && bitDepth === 8 && channels === 3) {
+          score -= 2;
+        }
+        if (channels === baseSettings.channels) {
+          score -= 1;
+        }
+        candidates.push({
+          score,
+          settings: {
+            ...settings,
+            width: dimensions.width,
+            height: dimensions.height
+          }
+        });
+      }
+    }
+    candidates.sort((a, b) => a.score - b.score);
+    return candidates;
+  }
+
+  function dimensionsFromPixelCount(pixelCount) {
+    const common = commonDimensions().find((entry) => entry.width * entry.height === pixelCount);
+    if (common) {
+      return { ...common, source: 'common-size' };
+    }
+
+    const ratios = [
+      { width: 16, height: 9 },
+      { width: 4, height: 3 },
+      { width: 3, height: 2 },
+      { width: 1, height: 1 }
+    ];
+    for (const ratio of ratios) {
+      const width = Math.round(Math.sqrt(pixelCount * ratio.width / ratio.height));
+      const height = Math.round(width * ratio.height / ratio.width);
+      if (width * height === pixelCount) {
+        return { width, height, source: `${ratio.width}:${ratio.height}` };
+      }
+    }
+
+    const square = Math.round(Math.sqrt(pixelCount));
+    if (square * square === pixelCount) {
+      return { width: square, height: square, source: 'square' };
+    }
+    return null;
+  }
+
+  function looksLikeThreeByteIntegerSamples(bytes) {
+    if (bytes.byteLength < 300 || bytes.byteLength % 3 !== 0) {
+      return false;
+    }
+    const samples = Math.floor(bytes.byteLength / 3);
+    const stride = Math.max(1, Math.floor(samples / 20000));
+    let checked = 0;
+    let highByteZero = 0;
+    for (let sample = 0; sample < samples; sample += stride) {
+      const offset = sample * 3;
+      if (bytes[offset + 2] === 0) {
+        highByteZero += 1;
+      }
+      checked += 1;
+    }
+    return checked > 0 && highByteZero / checked > 0.95;
+  }
+
   function pixelCountFromBytes(byteLength, settings) {
     const normalized = normalizeSettings(settings);
     let samples = 0;
@@ -718,6 +995,7 @@
       { width: 2048, height: 1080 },
       { width: 2048, height: 1536 },
       { width: 2592, height: 1944 },
+      { width: 2784, height: 1920 },
       { width: 3840, height: 2160 },
       { width: 4096, height: 2160 },
       { width: 4096, height: 3072 }
@@ -727,6 +1005,11 @@
   function patternFrom(value, fallback) {
     const pattern = String(value || fallback).toUpperCase();
     return PATTERNS.includes(pattern) ? pattern : fallback;
+  }
+
+  function displayModeFrom(value) {
+    const mode = String(value || 'mosaic').toLowerCase();
+    return DISPLAY_MODES.includes(mode) ? mode : 'mosaic';
   }
 
   function normalizeSourceLayout(layout) {
@@ -796,6 +1079,46 @@
     return value > 127 ? value - 256 : value;
   }
 
+  function float16ToNumber(value) {
+    const sign = (value & 0x8000) ? -1 : 1;
+    const exponent = (value >> 10) & 0x1f;
+    const fraction = value & 0x03ff;
+    if (exponent === 0) {
+      return sign * Math.pow(2, -14) * (fraction / 1024);
+    }
+    if (exponent === 0x1f) {
+      return fraction ? Number.NaN : sign * Number.POSITIVE_INFINITY;
+    }
+    return sign * Math.pow(2, exponent - 15) * (1 + fraction / 1024);
+  }
+
+  function outputDimensions(settings) {
+    const normalized = normalizeSettings(settings);
+    if (normalized.displayMode !== 'mosaic') {
+      if (normalized.channels === 1) {
+        const position = planePosition(normalized.displayMode, normalized.pattern);
+        return {
+          width: Math.max(1, Math.floor((normalized.width + 1 - (position & 1)) / 2)),
+          height: Math.max(1, Math.floor((normalized.height + 1 - (position >> 1)) / 2))
+        };
+      }
+      return {
+        width: normalized.width,
+        height: normalized.height
+      };
+    }
+    if (normalized.channels === 4) {
+      return {
+        width: normalized.width * 2,
+        height: normalized.height * 2
+      };
+    }
+    return {
+      width: normalized.width,
+      height: normalized.height
+    };
+  }
+
   function formatNumber(value) {
     return Number(value).toLocaleString('en-US');
   }
@@ -811,6 +1134,7 @@
   return {
     MAX_PIXELS,
     normalizeSettings,
+    outputDimensions,
     validateRenderable,
     prepareInput,
     expectedBytes,
@@ -823,6 +1147,7 @@
     renderToRgba,
     fourChannelShuffleMap,
     guessDimensions,
+    guessRawSettings,
     pixelCountFromBytes
   };
 });

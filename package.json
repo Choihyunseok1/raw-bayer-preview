@@ -33,6 +33,12 @@
             "filenamePattern": "*.raw"
           },
           {
+            "filenamePattern": "*.cr2"
+          },
+          {
+            "filenamePattern": "*.CR2"
+          },
+          {
             "filenamePattern": "*.bin"
           },
           {
@@ -164,6 +170,7 @@
             12,
             14,
             16,
+            24,
             32,
             64
           ],
@@ -194,14 +201,14 @@
       "explorer/context": [
         {
           "command": "rawBayerPreview.openPreview",
-          "when": "resourceExtname =~ /\\.(raw|bin|dat|rggb|bggr|grbg|gbrg|bayer|mipi|raw10|raw12|gray|rgb|u8|u16|i16|f32|f64|y|y8|y16|npy|pgm|ppm|pnm)$/i",
+          "when": "resourceExtname =~ /\\.(raw|cr2|bin|dat|rggb|bggr|grbg|gbrg|bayer|mipi|raw10|raw12|gray|rgb|u8|u16|i16|f32|f64|y|y8|y16|npy|pgm|ppm|pnm)$/i",
           "group": "navigation"
         }
       ],
       "editor/title": [
         {
           "command": "rawBayerPreview.openPreview",
-          "when": "resourceExtname =~ /\\.(raw|bin|dat|rggb|bggr|grbg|gbrg|bayer|mipi|raw10|raw12|gray|rgb|u8|u16|i16|f32|f64|y|y8|y16|npy|pgm|ppm|pnm)$/i",
+          "when": "resourceExtname =~ /\\.(raw|cr2|bin|dat|rggb|bggr|grbg|gbrg|bayer|mipi|raw10|raw12|gray|rgb|u8|u16|i16|f32|f64|y|y8|y16|npy|pgm|ppm|pnm)$/i",
           "group": "navigation"
         }
       ]

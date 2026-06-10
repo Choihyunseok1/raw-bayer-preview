@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const core = require('../media/raw-render-core');
 
-test('4-channel BGGR storage shuffles into RGGB display positions', () => {
+test('4-channel BGGR storage expands into RGGB Bayer display positions', () => {
   const bytes = new Uint8Array([
     10, 20, 30, 40,
     11, 21, 31, 41,
@@ -24,25 +24,36 @@ test('4-channel BGGR storage shuffles into RGGB display positions', () => {
     gain: 1
   });
 
+  assert.equal(result.width, 4);
+  assert.equal(result.height, 4);
   assert.deepEqual([...result.data], [
     40, 0, 0, 255,
+    0, 20, 0, 255,
+    41, 0, 0, 255,
     0, 21, 0, 255,
+    0, 30, 0, 255,
+    0, 0, 10, 255,
+    0, 31, 0, 255,
+    0, 0, 11, 255,
+    42, 0, 0, 255,
+    0, 22, 0, 255,
+    43, 0, 0, 255,
+    0, 23, 0, 255,
     0, 32, 0, 255,
+    0, 0, 12, 255,
+    0, 33, 0, 255,
     0, 0, 13, 255
   ]);
 });
 
-test('visible 4-channel samples drive auto normalize range', () => {
+test('all expanded 4-channel samples drive auto normalize range', () => {
   const bytes = new Uint8Array([
-    10, 250, 250, 250,
-    250, 20, 250, 250,
-    250, 250, 30, 250,
-    250, 250, 250, 40
+    10, 20, 30, 40
   ]);
 
   const result = core.renderToRgba(bytes, {
-    width: 2,
-    height: 2,
+    width: 1,
+    height: 1,
     channels: 4,
     pattern: 'RGGB',
     channelOrder: 'RGGB',
@@ -58,6 +69,61 @@ test('visible 4-channel samples drive auto normalize range', () => {
     0, 85, 0, 255,
     0, 170, 0, 255,
     0, 0, 255, 255
+  ]);
+});
+
+test('4-channel plane view extracts one shuffled Bayer component', () => {
+  const bytes = new Uint8Array([
+    10, 20, 30, 40,
+    11, 21, 31, 41
+  ]);
+
+  const result = core.renderToRgba(bytes, {
+    width: 2,
+    height: 1,
+    channels: 4,
+    displayMode: 'r',
+    pattern: 'RGGB',
+    channelOrder: 'BGGR',
+    bitDepth: 8,
+    packing: 'unpacked',
+    normalize: false,
+    black: 0,
+    white: 255,
+    gain: 1
+  });
+
+  assert.equal(result.width, 2);
+  assert.equal(result.height, 1);
+  assert.deepEqual([...result.data], [
+    40, 40, 40, 255,
+    41, 41, 41, 255
+  ]);
+});
+
+test('1-channel Bayer plane view extracts the selected CFA positions', () => {
+  const bytes = Uint8Array.from({ length: 16 }, (_, index) => index);
+  const result = core.renderToRgba(bytes, {
+    width: 4,
+    height: 4,
+    channels: 1,
+    displayMode: 'g2',
+    pattern: 'RGGB',
+    bitDepth: 8,
+    packing: 'unpacked',
+    normalize: false,
+    black: 0,
+    white: 255,
+    gain: 1
+  });
+
+  assert.equal(result.width, 2);
+  assert.equal(result.height, 2);
+  assert.deepEqual([...result.data], [
+    4, 4, 4, 255,
+    6, 6, 6, 255,
+    12, 12, 12, 255,
+    14, 14, 14, 255
   ]);
 });
 
@@ -80,6 +146,22 @@ test('16-bit endian handling reads unpacked samples correctly', () => {
 
   assert.equal(core.makeSampleReader(bytes, { bitDepth: 16, endian: 'little' })(0), 0x1234);
   assert.equal(core.makeSampleReader(bytes, { bitDepth: 16, endian: 'big' })(1), 0x1234);
+});
+
+test('24-bit endian and signed handling reads unpacked samples correctly', () => {
+  assert.equal(core.makeSampleReader(Uint8Array.of(0x56, 0x34, 0x12), {
+    bitDepth: 24,
+    endian: 'little'
+  })(0), 0x123456);
+  assert.equal(core.makeSampleReader(Uint8Array.of(0x12, 0x34, 0x56), {
+    bitDepth: 24,
+    endian: 'big'
+  })(0), 0x123456);
+  assert.equal(core.makeSampleReader(Uint8Array.of(0x00, 0x00, 0x80), {
+    bitDepth: 24,
+    sampleFormat: 'int',
+    endian: 'little'
+  })(0), -0x800000);
 });
 
 test('dimension guessing uses filename before byte-derived common sizes', () => {
@@ -127,11 +209,45 @@ test('NPY HWC array metadata configures an interleaved 4-channel Bayer preview',
   assert.equal(prepared.settings.sampleFormat, 'uint');
 
   const result = core.renderToRgba(prepared.bytes, prepared.settings);
+  assert.equal(result.width, 4);
+  assert.equal(result.height, 4);
   assert.deepEqual([...result.data], [
     40, 0, 0, 255,
+    0, 20, 0, 255,
+    41, 0, 0, 255,
     0, 21, 0, 255,
+    0, 30, 0, 255,
+    0, 0, 10, 255,
+    0, 31, 0, 255,
+    0, 0, 11, 255,
+    42, 0, 0, 255,
+    0, 22, 0, 255,
+    43, 0, 0, 255,
+    0, 23, 0, 255,
     0, 32, 0, 255,
+    0, 0, 12, 255,
+    0, 33, 0, 255,
     0, 0, 13, 255
+  ]);
+});
+
+test('NPY float16 dtype is parsed and rendered', () => {
+  const payload = Uint8Array.of(
+    0x00, 0x00,
+    0x00, 0x3c
+  );
+  const npy = makeNpy('<f2', [1, 2], payload);
+  const prepared = core.prepareInput(npy, {
+    normalize: false,
+    white: 1
+  }, 'half.npy');
+  const result = core.renderToRgba(prepared.bytes, prepared.settings);
+
+  assert.equal(prepared.settings.bitDepth, 16);
+  assert.equal(prepared.settings.sampleFormat, 'float');
+  assert.deepEqual([...result.data], [
+    0, 0, 0, 255,
+    0, 255, 0, 255
   ]);
 });
 
@@ -193,6 +309,22 @@ test('binary PGM header configures payload offset and image dimensions', () => {
     0, 128, 0, 255,
     0, 0, 255, 255
   ]);
+});
+
+test('raw settings inference recognizes padded 24-bit common dimensions', () => {
+  const bytes = new Uint8Array(2784 * 1920 * 3);
+  const guessed = core.guessRawSettings(bytes, {
+    width: 1920,
+    height: 1080,
+    channels: 4,
+    bitDepth: 8,
+    packing: 'unpacked'
+  }, 'night.raw');
+
+  assert.equal(guessed.width, 2784);
+  assert.equal(guessed.height, 1920);
+  assert.equal(guessed.channels, 1);
+  assert.equal(guessed.bitDepth, 24);
 });
 
 function packMipi10(samples) {

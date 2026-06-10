@@ -7,6 +7,7 @@ const controls = {
   width: document.getElementById('width'),
   height: document.getElementById('height'),
   channels: document.getElementById('channels'),
+  displayMode: document.getElementById('displayMode'),
   pattern: document.getElementById('pattern'),
   channelOrder: document.getElementById('channelOrder'),
   bitDepth: document.getElementById('bitDepth'),
@@ -60,12 +61,11 @@ window.addEventListener('message', (event) => {
   raw = prepared.bytes;
   sourceLayout = prepared.settings.sourceLayout || null;
   const settings = prepared.settings;
-  const filenameGuess = prepared.metadata.format === 'raw' && !restoredState.settings
-    ? renderCore.guessDimensions(raw.byteLength, settings, message.name)
+  const rawGuess = prepared.metadata.format === 'raw' && !restoredState.settings
+    ? renderCore.guessRawSettings(raw, settings, message.name)
     : null;
-  if (filenameGuess?.source === 'filename') {
-    settings.width = filenameGuess.width;
-    settings.height = filenameGuess.height;
+  if (rawGuess) {
+    Object.assign(settings, rawGuess);
   }
 
   applySettings(settings);
@@ -90,7 +90,7 @@ controls.stage.addEventListener('wheel', (event) => {
   setZoom(zoomValue + (event.deltaY < 0 ? 10 : -10));
 }, { passive: false });
 
-for (const id of ['width', 'height', 'channels', 'pattern', 'channelOrder', 'bitDepth', 'sampleFormat', 'endian', 'packing', 'normalize', 'black', 'white']) {
+for (const id of ['width', 'height', 'channels', 'displayMode', 'pattern', 'channelOrder', 'bitDepth', 'sampleFormat', 'endian', 'packing', 'normalize', 'black', 'white']) {
   controls[id].addEventListener('change', () => {
     if (id === 'packing' || id === 'bitDepth' || id === 'sampleFormat') {
       syncPackingBitDepth();
@@ -107,6 +107,7 @@ function applySettings(settings) {
   controls.width.value = normalized.width;
   controls.height.value = normalized.height;
   controls.channels.value = normalized.channels;
+  controls.displayMode.value = normalized.displayMode;
   controls.pattern.value = normalized.pattern;
   controls.channelOrder.value = normalized.channelOrder;
   controls.bitDepth.value = normalized.bitDepth;
@@ -140,7 +141,8 @@ async function render() {
   }
 
   const expected = renderCore.expectedBytes(settings);
-  controls.status.textContent = `Rendering ${settings.width} x ${settings.height}...`;
+  const dimensions = renderCore.outputDimensions(settings);
+  controls.status.textContent = `Rendering ${dimensions.width} x ${dimensions.height}...`;
   persistSettings();
 
   await nextFrame();
@@ -148,13 +150,13 @@ async function render() {
     return;
   }
 
-  controls.canvas.width = settings.width;
-  controls.canvas.height = settings.height;
+  controls.canvas.width = dimensions.width;
+  controls.canvas.height = dimensions.height;
   setZoom(zoomValue);
 
   let image;
   try {
-    image = ctx.createImageData(settings.width, settings.height);
+    image = ctx.createImageData(dimensions.width, dimensions.height);
   } catch (error) {
     controls.status.textContent = `Canvas allocation failed: ${error.message}`;
     return;
@@ -182,6 +184,7 @@ function readSettings() {
     width: controls.width.value,
     height: controls.height.value,
     channels: Number(controls.channels.value),
+    displayMode: controls.displayMode.value,
     pattern: controls.pattern.value,
     channelOrder: controls.channelOrder.value,
     bitDepth: Number(controls.bitDepth.value),
@@ -236,7 +239,7 @@ function syncPackingBitDepth() {
     controls.bitDepth.disabled = false;
     return;
   }
-  if (controls.sampleFormat.value === 'float' && controls.bitDepth.value !== '32') {
+  if (controls.sampleFormat.value === 'float' && !['16', '32', '64'].includes(controls.bitDepth.value)) {
     controls.bitDepth.value = '32';
   }
   controls.bitDepth.disabled = false;
@@ -244,7 +247,8 @@ function syncPackingBitDepth() {
 }
 
 function setZoom(value) {
-  zoomValue = Math.max(5, Math.min(800, Math.round(Number(value) || 100)));
+  const numericValue = Number(value);
+  zoomValue = Math.max(5, Math.min(800, Math.round(Number.isFinite(numericValue) ? numericValue : 100)));
   controls.zoom.value = String(zoomValue);
   controls.zoomLabel.textContent = `${zoomValue}%`;
 

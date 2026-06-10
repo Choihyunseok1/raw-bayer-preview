@@ -42,7 +42,6 @@ class RawBayerPreviewProvider {
 
     webview.html = this.getHtml(webview);
 
-    const fileBytes = await vscode.workspace.fs.readFile(document.uri);
     const config = vscode.workspace.getConfiguration('rawBayerPreview');
     const initialSettings = {
       width: config.get('defaultWidth', 1920),
@@ -58,16 +57,25 @@ class RawBayerPreviewProvider {
       gain: 1,
       normalize: true
     };
+    const fileBytesPromise = vscode.workspace.fs.readFile(document.uri);
 
     webview.onDidReceiveMessage(async (message) => {
       if (message?.type === 'ready') {
-        webview.postMessage({
-          type: 'file',
-          name: vscode.workspace.asRelativePath(document.uri),
-          byteLength: fileBytes.byteLength,
-          settings: initialSettings,
-          buffer: fileBytes.buffer
-        });
+        try {
+          const fileBytes = await fileBytesPromise;
+          webview.postMessage({
+            type: 'file',
+            name: vscode.workspace.asRelativePath(document.uri),
+            byteLength: fileBytes.byteLength,
+            settings: initialSettings,
+            buffer: exactArrayBuffer(fileBytes)
+          });
+        } catch (error) {
+          webview.postMessage({
+            type: 'error',
+            message: `Failed to read RAW file: ${error.message}`
+          });
+        }
       }
     });
   }
@@ -75,6 +83,7 @@ class RawBayerPreviewProvider {
   getHtml(webview) {
     const nonce = getNonce();
     const cssUri = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'media', 'preview.css'));
+    const coreJsUri = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'media', 'raw-render-core.js'));
     const jsUri = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'media', 'preview.js'));
 
     return `<!DOCTYPE html>
@@ -147,6 +156,7 @@ class RawBayerPreviewProvider {
       <label>Gain <input id="gain" type="range" min="0.1" max="8" step="0.1"></label>
       <div class="actions">
         <button id="render">Render</button>
+        <button id="guess">Guess</button>
         <button id="fit">Fit</button>
         <button id="oneToOne">1:1</button>
       </div>
@@ -164,6 +174,7 @@ class RawBayerPreviewProvider {
       </div>
     </section>
   </main>
+  <script nonce="${nonce}" src="${coreJsUri}"></script>
   <script nonce="${nonce}" src="${jsUri}"></script>
 </body>
 </html>`;
@@ -177,6 +188,10 @@ function getNonce() {
     text += chars.charAt(Math.floor(Math.random() * chars.length));
   }
   return text;
+}
+
+function exactArrayBuffer(bytes) {
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
 }
 
 module.exports = { activate };

@@ -22,6 +22,9 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: Test
+        run: npm test
+
       - name: Package extension
         run: npx vsce package
 

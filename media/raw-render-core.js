@@ -247,7 +247,9 @@
     if (values.length >= 1000) {
       values.sort((a, b) => a - b);
       low = quantile(values, 0.005);
-      high = quantile(values, 0.995);
+      const high98 = quantile(values, 0.98);
+      const high995 = quantile(values, 0.995);
+      high = high98 > low && high995 > high98 * 2.5 ? high98 : high995;
     }
 
     if (!Number.isFinite(low) || high <= low) {

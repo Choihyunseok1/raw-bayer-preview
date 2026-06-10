@@ -35,6 +35,7 @@ let raw = null;
 let renderToken = 0;
 let zoomValue = 100;
 let sourceLayout = null;
+let currentSourceName = '';
 const ctx = controls.canvas.getContext('2d', { alpha: false, willReadFrequently: false });
 const restoredState = vscode.getState() || {};
 
@@ -49,7 +50,8 @@ window.addEventListener('message', (event) => {
   }
 
   const sourceBytes = new Uint8Array(message.buffer);
-  const baseSettings = { ...message.settings, ...(restoredState.settings || {}) };
+  const restoredSettings = restoredState.sourceName === message.name ? restoredState.settings : null;
+  const baseSettings = { ...message.settings, ...(restoredSettings || {}) };
   let prepared;
   try {
     prepared = renderCore.prepareInput(sourceBytes, baseSettings, message.name);
@@ -60,12 +62,18 @@ window.addEventListener('message', (event) => {
 
   raw = prepared.bytes;
   sourceLayout = prepared.settings.sourceLayout || null;
+  currentSourceName = message.name;
   const settings = prepared.settings;
-  const rawGuess = prepared.metadata.format === 'raw' && !restoredState.settings
+  const expected = renderCore.expectedBytes(settings);
+  const rawGuess = prepared.metadata.format === 'raw'
     ? renderCore.guessRawSettings(raw, settings, message.name)
     : null;
-  if (rawGuess) {
-    Object.assign(settings, rawGuess);
+  if (rawGuess && (!restoredSettings || expected !== raw.byteLength)) {
+    Object.assign(settings, rawGuess, {
+      normalize: true,
+      black: 0,
+      white: 0
+    });
   }
 
   applySettings(settings);
@@ -200,7 +208,10 @@ function readSettings() {
 }
 
 function persistSettings() {
-  vscode.setState({ settings: renderCore.normalizeSettings(readSettings()) });
+  vscode.setState({
+    sourceName: currentSourceName,
+    settings: renderCore.normalizeSettings(readSettings())
+  });
 }
 
 function guessSize() {

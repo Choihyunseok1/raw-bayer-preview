@@ -316,6 +316,7 @@ function setZoom(value) {
   const displayHeight = Math.max(1, controls.canvas.height * zoomValue / 100);
   controls.canvas.style.width = `${displayWidth}px`;
   controls.canvas.style.height = `${displayHeight}px`;
+  controls.canvas.style.imageRendering = zoomValue < 100 ? 'auto' : 'pixelated';
 }
 
 function fitToStage() {

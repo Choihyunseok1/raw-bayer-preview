@@ -2,7 +2,7 @@
   "name": "raw-bayer-preview",
   "displayName": "RAW Bayer Preview",
   "description": "Preview generic RAW image buffers with 4-channel Bayer pixel-shuffle visualization in VS Code.",
-  "version": "0.3.9",
+  "version": "0.3.10",
   "publisher": "personal",
   "icon": "media/icon.png",
   "engines": {

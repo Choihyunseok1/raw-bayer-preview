@@ -1,6 +1,8 @@
-# RAW Bayer Preview
+# [VSCode Extension] RAW image preview
 
-VS Code extension for previewing generic RAW image buffers in an interactive webview.
+VS Code extension for previewing RAW/Bayer image buffers in an interactive webview.
+
+Open `.raw`, `.npy`, `.CR2`, `.NEF`, `.ARW`, and other RAW-like files directly in VS Code, then inspect image size, bit depth, Bayer pattern, channel order, and individual `R`, `G1`, `G2`, and `B` planes without leaving the editor.
 
 ## Features
 

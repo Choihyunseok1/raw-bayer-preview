@@ -1049,6 +1049,7 @@
       { width: 2048, height: 1536 },
       { width: 2592, height: 1944 },
       { width: 2784, height: 1920 },
+      { width: 2880, height: 3712 },
       { width: 3840, height: 2784 },
       { width: 3840, height: 2160 },
       { width: 4096, height: 2160 },

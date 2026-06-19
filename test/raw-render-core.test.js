@@ -367,8 +367,8 @@ test('raw settings inference prefers RAW12 packed for sensor-sized buffers', () 
     packing: 'unpacked'
   }, 'day.raw');
 
-  assert.equal(guessed.width, 3840);
-  assert.equal(guessed.height, 2784);
+  assert.equal(guessed.width, 2880);
+  assert.equal(guessed.height, 3712);
   assert.equal(guessed.channels, 1);
   assert.equal(guessed.bitDepth, 12);
   assert.equal(guessed.packing, 'mipi12');
@@ -390,8 +390,8 @@ test('raw settings inference overrides stale 24-bit state for RAW12 packed buffe
     packing: 'unpacked'
   }, 'night.raw');
 
-  assert.equal(guessed.width, 3840);
-  assert.equal(guessed.height, 2784);
+  assert.equal(guessed.width, 2880);
+  assert.equal(guessed.height, 3712);
   assert.equal(guessed.channels, 1);
   assert.equal(guessed.bitDepth, 12);
   assert.equal(guessed.packing, 'mipi12');

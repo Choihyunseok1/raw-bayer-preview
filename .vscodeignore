@@ -3,6 +3,11 @@
 node_modules/**
 *.vsix
 *.log
+debug*.png
+coverage/**
+tmp/**
+.DS_Store
+Thumbs.db
 .git/**
 .github/**
 test/**

@@ -12,6 +12,15 @@
     "Visualization",
     "Other"
   ],
+  "keywords": [
+    "vscode",
+    "raw",
+    "bayer",
+    "image-preview",
+    "camera-raw",
+    "numpy",
+    "npy"
+  ],
   "activationEvents": [
     "onCustomEditor:rawBayerPreview.viewer",
     "onCommand:rawBayerPreview.openPreview"
@@ -21,13 +30,13 @@
     "commands": [
       {
         "command": "rawBayerPreview.openPreview",
-        "title": "RAW Bayer Preview: Open Preview"
+        "title": "RAW image preview: Open Preview"
       }
     ],
     "customEditors": [
       {
         "viewType": "rawBayerPreview.viewer",
-        "displayName": "RAW Bayer Preview",
+        "displayName": "RAW image preview",
         "selector": [
           {
             "filenamePattern": "*.raw"
@@ -166,7 +175,7 @@
       }
     ],
     "configuration": {
-      "title": "RAW Bayer Preview",
+      "title": "RAW image preview",
       "properties": {
         "rawBayerPreview.defaultWidth": {
           "type": "number",
@@ -268,6 +277,10 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/Choihyunseok1/raw-bayer-preview.git"
+  },
+  "homepage": "https://github.com/Choihyunseok1/raw-bayer-preview#readme",
+  "bugs": {
+    "url": "https://github.com/Choihyunseok1/raw-bayer-preview/issues"
   },
   "license": "MIT",
   "devDependencies": {

@@ -1,13 +1,14 @@
-name: Package VSIX
+name: CI
 
 on:
-  workflow_dispatch:
   push:
-    tags:
-      - "v*"
+    branches:
+      - master
+      - main
+  pull_request:
 
 jobs:
-  package:
+  test:
     runs-on: ubuntu-latest
 
     steps:
@@ -25,12 +26,3 @@ jobs:
 
       - name: Test
         run: npm test
-
-      - name: Package extension
-        run: npm run package
-
-      - name: Upload VSIX artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: raw-bayer-preview-vsix
-          path: "*.vsix"

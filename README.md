@@ -56,6 +56,8 @@ python -m pip install rawpy numpy
 
 The extension tries `python3`/`python` automatically on macOS and Linux, and `py -3`/`python`/`python3` on Windows. If VS Code uses a different Python, set `rawBayerPreview.pythonPath` to the executable path.
 
+Flat RAW, NumPy, and PNM preview works in Restricted Mode. Camera RAW decoding runs Python/rawpy, so it requires Workspace Trust.
+
 `.npz` is intentionally not opened yet because it is a ZIP container that can hold multiple compressed arrays.
 
 ## Development

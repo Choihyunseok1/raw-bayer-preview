@@ -218,6 +218,9 @@ function getNonce() {
 
 async function loadPreviewBytes(uri, options = {}) {
   if (isCameraRawPath(uri.fsPath || uri.path || uri.toString())) {
+    if (!vscode.workspace.isTrusted) {
+      throw new Error('Camera RAW decoding requires Workspace Trust because it runs Python/rawpy. Trust the workspace or open RAW/NumPy/PNM files that do not need Python decoding.');
+    }
     return convertCameraRawUriToBuffer(uri, options);
   }
   const bytes = await vscode.workspace.fs.readFile(uri);

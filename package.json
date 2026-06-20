@@ -2,11 +2,24 @@
   "name": "raw-bayer-preview",
   "displayName": "[VSCode Extension] RAW image preview",
   "description": "Preview RAW/Bayer image buffers with bit-depth, Bayer pattern, and channel-plane controls in VS Code.",
-  "version": "0.3.13",
+  "version": "0.3.14",
   "publisher": "personal",
   "icon": "media/icon.png",
   "engines": {
     "vscode": "^1.80.0"
+  },
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "virtualWorkspaces": true,
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Flat RAW, NumPy, and PNM preview works in Restricted Mode. Camera RAW decoding runs Python/rawpy and requires Workspace Trust.",
+      "restrictedConfigurations": [
+        "rawBayerPreview.pythonPath"
+      ]
+    }
   },
   "categories": [
     "Visualization",
@@ -258,7 +271,7 @@
         "rawBayerPreview.pythonPath": {
           "type": "string",
           "default": "",
-          "description": "Optional Python executable for camera RAW decoding. Leave blank to try python3/python automatically."
+          "description": "Optional Python executable for camera RAW decoding. Leave blank to try py/python commands automatically."
         }
       }
     },
